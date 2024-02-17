@@ -6,7 +6,6 @@ use clap::{Arg, Command};
 use winreg::enums::*;
 use winreg::RegKey;
 
-
 fn main() -> io::Result<()> {
     // Parse command line arguments
     const PWR_ARG: &str = "power";
@@ -39,34 +38,81 @@ fn main() -> io::Result<()> {
     match matches.subcommand() {
         Some(("list", _)) => print_profiles()?,
         Some(("set", sub_matches)) => {
+            // Set power
             let arg_pwr: &str;
-
             let arg_pwr_opt = sub_matches.try_get_one::<String>(PWR_ARG);
-            if arg_pwr_opt.is_ok() {
-                let pwr_opt = arg_pwr_opt.unwrap();
-                arg_pwr = pwr_opt.expect("misparse of arg pwr"); // panic
+            if let Ok(Some(p)) = arg_pwr_opt {
+                arg_pwr = p;
             } else {
                 arg_pwr = "";
             }
-            let spr = set_power_profile(arg_pwr);
-            if spr.is_err() {
-                println!("{}", spr.unwrap_err());
+            let spwr = set_power_profile(arg_pwr);
+            if spwr.is_err() {
+                println!("{}", spwr.unwrap_err());
             }
-            // set_profiles(sub_matches.get_one(PWR_ARG).unwrap_or_default(), sub_matches.get_one(MON_ARG).unwrap_or_default())?;
+
+            // Set monitor profile
+            let arg_mon: &str;
+            let arg_mon_opt = sub_matches.try_get_one::<String>(MON_ARG);
+            if let Ok(Some(p)) = arg_mon_opt {
+                arg_mon = p;
+            } else {
+                arg_mon = "";
+            }
+            let smon = set_monitor_profile(arg_mon);
+            if smon.is_err() {
+                println!("{}", smon.unwrap_err());
+            }
         }
         _ => unreachable!(),
     }
 
-    // validate profiles requested are in the list
-    //
-    // Set displayFusion
-    // "C:\Program Files\DisplayFusion\DisplayFusionCommand.exe" -monitorloadprofile "<profile
-    // name>"
-    //
-    // Set powercfg
-    // powercfg /S GUID
-
     Ok(())
+}
+
+// Set displayFusion
+// "C:\Program Files\DisplayFusion\DisplayFusionCommand.exe" -monitorloadprofile "<profile
+// name>"
+fn set_monitor_profile(profile: &str) -> io::Result<()> {
+    if profile.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "No monitor profile given",
+        ));
+    }
+    let profiles = df_monitor_profiles()?;
+    let mut profile_found = false;
+    for prof in profiles.iter() {
+        if prof == profile {
+            profile_found = true;
+            break;
+        }
+    }
+    if !profile_found {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Monitor profile not found",
+        ));
+    }
+    println!("Setting monitor profile to: '{}'", profile);
+
+    // DisplayFusionCommand.exe isn't typically in the path
+    const DF_CMD: &str = r#"C:\Program Files\DisplayFusion\DisplayFusionCommand.exe"#;
+    let mut cmd = std::process::Command::new(DF_CMD);
+    let opts = ["-monitorloadprofile", profile];
+    let cmd = cmd.args(opts);
+
+    let status = cmd.status();
+    if status.is_err() {
+        Err(io::Error::new(io::ErrorKind::Other, status.err().unwrap()))
+    } else if !status.unwrap().success() {
+        let output = cmd.output().unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let err_msg = format!("Error setting monitor profile: {}", stderr);
+        Err(io::Error::new(io::ErrorKind::Other, err_msg))
+    } else {
+        Ok(())
+    }
 }
 
 fn find_power_profile_by_name<'a>(
@@ -177,7 +223,6 @@ impl PowerProfile {
 } */
 
 fn power_profiles() -> io::Result<Vec<PowerProfile>> {
-    // fn power_profiles() -> Result<Vec<PowerProfile>, ()> {
     let mut profiles: Vec<PowerProfile> = vec![];
     // run the `powercfg /L` comand    // run the `powercfg /L` comand
     let output = std::process::Command::new("powercfg")
